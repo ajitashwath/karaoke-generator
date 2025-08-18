@@ -103,18 +103,22 @@ class KaraokeGenerator:
             if not os.path.exists(audio_path) or os.path.getsize(audio_path) < 10240:
                 raise ValueError("Downloaded audio file is missing, empty, or too small.")
 
+            # Fixed: Use librosa.load with explicit sr parameter to avoid deprecation warning
             y, sr = librosa.load(audio_path, sr=22050, mono=True)
+            
+            # Use harmonic-percussive separation to create instrumental
             y_harmonic, _ = librosa.effects.hpss(y)
             
+            # Fixed: Use soundfile.write instead of deprecated librosa.output.write_wav
             sf.write(instrumental_path, y_harmonic, sr)
             
             return instrumental_path
         except Exception as e:
-            print(f"A detailed error occurred in librosa: {e}")
-            raise Exception(f"Could not process the audio file with librosa. Ensure FFmpeg is installed and accessible in your system's PATH.")
+            print(f"A detailed error occurred in audio processing: {e}")
+            raise Exception(f"Could not process the audio file. Ensure FFmpeg is installed and accessible in your system's PATH. Error: {str(e)}")
 
     def create_background_frames(self, duration: float, fps: int = 24) -> str:
-        """Create background video frames using OpenCV instead of MoviePy"""
+        """Create background video frames using OpenCV"""
         width, height = 1920, 1080
         total_frames = int(duration * fps)
         frames_dir = tempfile.mkdtemp()
@@ -143,22 +147,34 @@ class KaraokeGenerator:
         return frames_dir
 
     def create_text_overlay_frames(self, timed_lyrics: List[tuple], duration: float, fps: int = 24) -> str:
-        """Create text overlay frames using PIL instead of MoviePy TextClip"""
+        """Create text overlay frames using PIL"""
         width, height = 1920, 1080
         total_frames = int(duration * fps)
         overlay_dir = tempfile.mkdtemp()
         
         # Try to load a font, fallback to default if not available
         try:
-            font = ImageFont.truetype("arial.ttf", 50)
-        except:
-            try:
-                font = ImageFont.truetype("/System/Library/Fonts/Arial.ttf", 50)  # macOS
-            except:
+            # Try different font paths for different operating systems
+            font_paths = [
+                "arial.ttf",  # Windows
+                "/System/Library/Fonts/Arial.ttf",  # macOS
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",  # Linux
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",  # Linux alternative
+            ]
+            
+            font = None
+            for font_path in font_paths:
                 try:
-                    font = ImageFont.truetype("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", 50)  # Linux
-                except:
-                    font = ImageFont.load_default()
+                    font = ImageFont.truetype(font_path, 50)
+                    break
+                except (OSError, IOError):
+                    continue
+            
+            if font is None:
+                font = ImageFont.load_default()
+                
+        except Exception:
+            font = ImageFont.load_default()
         
         for frame_num in range(total_frames):
             t = frame_num / fps
@@ -176,15 +192,19 @@ class KaraokeGenerator:
             
             if current_text:
                 # Get text dimensions
-                bbox = draw.textbbox((0, 0), current_text, font=font)
-                text_width = bbox[2] - bbox[0]
-                text_height = bbox[3] - bbox[1]
+                try:
+                    bbox = draw.textbbox((0, 0), current_text, font=font)
+                    text_width = bbox[2] - bbox[0]
+                    text_height = bbox[3] - bbox[1]
+                except AttributeError:
+                    # Fallback for older PIL versions
+                    text_width, text_height = draw.textsize(current_text, font=font)
                 
                 # Center the text
                 x = (width - text_width) // 2
                 y = (height - text_height) // 2 + height // 4  # Lower third
                 
-                # Draw text with outline
+                # Draw text with outline for better visibility
                 outline_width = 2
                 for dx in range(-outline_width, outline_width + 1):
                     for dy in range(-outline_width, outline_width + 1):
@@ -202,6 +222,12 @@ class KaraokeGenerator:
     def combine_video_with_ffmpeg(self, background_dir: str, overlay_dir: str, audio_path: str, output_path: str, fps: int = 24) -> str:
         """Use FFmpeg to combine background, text overlay, and audio"""
         try:
+            # Check if FFmpeg is available
+            try:
+                subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                raise Exception("FFmpeg not found. Please install FFmpeg and ensure it's in your PATH.")
+            
             # FFmpeg command to combine everything
             cmd = [
                 'ffmpeg', '-y',  # Overwrite output file
@@ -217,6 +243,7 @@ class KaraokeGenerator:
                 '-c:a', 'aac',      # Audio codec
                 '-pix_fmt', 'yuv420p',  # Pixel format for compatibility
                 '-shortest',  # End when shortest stream ends
+                '-loglevel', 'error',  # Reduce FFmpeg output
                 output_path
             ]
             
@@ -225,40 +252,43 @@ class KaraokeGenerator:
             
         except subprocess.CalledProcessError as e:
             raise Exception(f"FFmpeg error: {e.stderr}")
-        except FileNotFoundError:
-            raise Exception("FFmpeg not found. Please install FFmpeg and ensure it's in your PATH.")
 
     def create_karaoke_video(self, instrumental_path: str, lyrics: str, song_info: Dict[str, Any]) -> str:
-        """Create karaoke video using OpenCV, PIL, and FFmpeg instead of MoviePy"""
+        """Create karaoke video using OpenCV, PIL, and FFmpeg"""
         
-        # Get audio duration using librosa
-        y, sr = librosa.load(instrumental_path, sr=None)
-        duration = len(y) / sr
-        
-        fps = 24
-        timed_lyrics = self.time_lyrics(lyrics, duration)
-        
-        # Create background frames
-        background_dir = self.create_background_frames(duration, fps)
-        
-        # Create text overlay frames
-        overlay_dir = self.create_text_overlay_frames(timed_lyrics, duration, fps)
-        
-        # Combine everything with FFmpeg
-        output_path = tempfile.mktemp(suffix='.mp4')
-        final_path = self.combine_video_with_ffmpeg(background_dir, overlay_dir, instrumental_path, output_path, fps)
-        
-        # Clean up temporary directories
         try:
-            import shutil
-            shutil.rmtree(background_dir)
-            shutil.rmtree(overlay_dir)
-        except:
-            pass
-        
-        return final_path
+            # Get audio duration using librosa
+            y, sr = librosa.load(instrumental_path, sr=None)
+            duration = len(y) / sr
+            
+            fps = 24
+            timed_lyrics = self.time_lyrics(lyrics, duration)
+            
+            # Create background frames
+            background_dir = self.create_background_frames(duration, fps)
+            
+            # Create text overlay frames
+            overlay_dir = self.create_text_overlay_frames(timed_lyrics, duration, fps)
+            
+            # Combine everything with FFmpeg
+            output_path = tempfile.mktemp(suffix='.mp4')
+            final_path = self.combine_video_with_ffmpeg(background_dir, overlay_dir, instrumental_path, output_path, fps)
+            
+            # Clean up temporary directories
+            try:
+                import shutil
+                shutil.rmtree(background_dir)
+                shutil.rmtree(overlay_dir)
+            except Exception as cleanup_error:
+                print(f"Warning: Could not clean up temporary files: {cleanup_error}")
+            
+            return final_path
+            
+        except Exception as e:
+            raise Exception(f"Error creating karaoke video: {str(e)}")
 
     def time_lyrics(self, lyrics: str, duration: float) -> List[tuple]:
+        """Create timing for lyrics based on duration"""
         lines = [line.strip() for line in lyrics.split('\n') if line.strip() and not line.startswith('[')]
         if not lines:
             return [(0, duration, "Instrumental")]
@@ -273,28 +303,111 @@ class KaraokeGenerator:
         return timed_lyrics
 
     def generate_karaoke(self, song_name: str, answers: Dict[str, str], progress_callback: Callable = None) -> Dict[str, Any]:
+        """Main method to generate karaoke video"""
         try:
-            if progress_callback: progress_callback("Getting song information...", 0.1)
+            if progress_callback: 
+                progress_callback("Getting song information...", 0.1)
             song_info = self.get_song_info(song_name, answers)
             
-            if progress_callback: progress_callback("Fetching lyrics...", 0.2)
+            if progress_callback: 
+                progress_callback("Fetching lyrics...", 0.2)
             lyrics = self.get_lyrics(song_info)
             
-            if progress_callback: progress_callback("Downloading audio...", 0.4)
+            if progress_callback: 
+                progress_callback("Downloading audio...", 0.4)
             audio_path = self.download_audio(song_info)
             
-            if progress_callback: progress_callback("Creating instrumental track...", 0.6)
+            if progress_callback: 
+                progress_callback("Creating instrumental track...", 0.6)
             instrumental_path = self.separate_vocals(audio_path)
             
-            if progress_callback: progress_callback("Generating karaoke video...", 0.8)
+            if progress_callback: 
+                progress_callback("Generating karaoke video...", 0.8)
             video_path = self.create_karaoke_video(instrumental_path, lyrics, song_info)
             
-            if progress_callback: progress_callback("Complete!", 1.0)
+            if progress_callback: 
+                progress_callback("Complete!", 1.0)
             
             return {
-                'song_info': song_info, 'lyrics': lyrics,
-                'instrumental_path': instrumental_path, 'video_path': video_path,
+                'song_info': song_info, 
+                'lyrics': lyrics,
+                'instrumental_path': instrumental_path, 
+                'video_path': video_path,
                 'success': True
             }
+            
         except Exception as e:
-            return {'success': False, 'error': str(e)}
+            error_msg = f"Error generating karaoke: {str(e)}"
+            print(error_msg)
+            return {'success': False, 'error': error_msg}
+
+
+# Additional utility functions for installation requirements
+def check_dependencies():
+    """Check if required dependencies are installed"""
+    dependencies = {
+        'ffmpeg': 'FFmpeg is required for video processing',
+        'librosa': 'librosa is required for audio processing', 
+        'soundfile': 'soundfile is required for audio I/O',
+        'opencv-python': 'opencv-python (cv2) is required for video processing',
+        'Pillow': 'Pillow (PIL) is required for image processing',
+        'yt-dlp': 'yt-dlp is required for downloading audio',
+        'langchain-community': 'langchain-community is required for LLM integration'
+    }
+    
+    missing = []
+    
+    # Check FFmpeg separately as it's a system dependency
+    try:
+        subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        missing.append('ffmpeg (system dependency)')
+    
+    # Check Python packages
+    python_packages = ['librosa', 'soundfile', 'cv2', 'PIL', 'yt_dlp']
+    for package in python_packages:
+        try:
+            __import__(package)
+        except ImportError:
+            if package == 'cv2':
+                missing.append('opencv-python')
+            elif package == 'PIL':
+                missing.append('Pillow')
+            elif package == 'yt_dlp':
+                missing.append('yt-dlp')
+            else:
+                missing.append(package)
+    
+    return missing
+
+
+def install_requirements():
+    """Print installation instructions for missing dependencies"""
+    missing = check_dependencies()
+    
+    if not missing:
+        print("✅ All dependencies are installed!")
+        return True
+    
+    print("❌ Missing dependencies:")
+    for dep in missing:
+        print(f"   - {dep}")
+    
+    print("\n📦 Installation commands:")
+    
+    python_deps = [dep for dep in missing if dep != 'ffmpeg (system dependency)']
+    if python_deps:
+        print(f"pip install {' '.join(python_deps)}")
+    
+    if 'ffmpeg (system dependency)' in missing:
+        print("\nFFmpeg installation:")
+        print("  Windows: Download from https://ffmpeg.org/download.html")
+        print("  macOS: brew install ffmpeg")
+        print("  Linux: sudo apt install ffmpeg (Ubuntu/Debian) or sudo yum install ffmpeg (RHEL/CentOS)")
+    
+    return False
+
+
+if __name__ == "__main__":
+    # Check dependencies on import
+    install_requirements()
