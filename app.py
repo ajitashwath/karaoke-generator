@@ -7,7 +7,7 @@ import base64
 
 def main():
     st.set_page_config(
-        page_title="🎤 AI Karaoke Generator",
+        page_title="AI Karaoke Generator",
         page_icon="🎤",
         layout="wide"
     )
