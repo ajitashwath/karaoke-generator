@@ -1,0 +1,12 @@
+streamlit
+langchain
+openai
+yt-dlp
+librosa
+soundfile
+opencv-python
+moviepy
+spleeter
+lyricsgenius
+numpy
+requests
