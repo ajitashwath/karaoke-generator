@@ -12,8 +12,9 @@ import soundfile as sf
 import cv2
 import numpy as np
 from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip, AudioFileClip
-from spleeter.separator import Separator
-import genius
+import torch
+from demucs import pretrained
+from demucs.apply import apply_model
 import lyricsgenius
 
 class KaraokeGenerator:
@@ -21,14 +22,30 @@ class KaraokeGenerator:
         self.openai_api_key = openai_api_key
         self.llm = ChatOpenAI(
             openai_api_key=openai_api_key,
-            model="gpt-4o-mini",
+            model="gpt-4",
             temperature=0.3
         )
         
-        self.separator = Separator('spleeter:2stems-16khz')
+        # Initialize Demucs for audio separation (better than Spleeter)
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        print(f"Using device: {self.device}")
+        
+        # Load pre-trained Demucs model
+        try:
+            self.separator_model = pretrained.get_model('htdemucs')
+            self.separator_model.to(self.device)
+        except Exception as e:
+            print(f"Failed to load Demucs model: {e}")
+            # Fallback to CPU-optimized model
+            self.separator_model = pretrained.get_model('mdx_extra')
+            self.separator_model.to('cpu')
+        
+        # You'll need to get a Genius API key for lyrics
         # self.genius = lyricsgenius.Genius("YOUR_GENIUS_API_KEY")
     
     def get_clarifying_questions(self, song_name: str) -> List[str]:
+        """Generate 2-3 clarifying questions about the song."""
+        
         prompt = ChatPromptTemplate.from_messages([
             SystemMessage(content="""You are a music expert helping to identify the exact song for karaoke generation.
             Given a song name, generate 2-3 specific questions to clarify which exact version/recording the user wants.
@@ -39,16 +56,18 @@ class KaraokeGenerator:
         
         response = self.llm.invoke(prompt.format_messages())
         
+        # Parse the response to extract questions
         questions = []
         lines = response.content.strip().split('\n')
         for line in lines:
             if line.strip() and ('?' in line):
+                # Clean up the question
                 question = line.strip()
                 if question.startswith(('1.', '2.', '3.', '-', '*')):
                     question = question[2:].strip()
                 questions.append(question)
         
-        return questions[:3] 
+        return questions[:3]  # Limit to 3 questions max
     
     def get_song_info(self, song_name: str, answers: Dict[str, str]) -> Dict[str, Any]:
         """Get detailed song information using LLM."""
@@ -132,31 +151,107 @@ class KaraokeGenerator:
                 
                 if search_results['entries']:
                     video_url = search_results['entries'][0]['webpage_url']
+                    
+                    # Download the audio
                     info = ydl.extract_info(video_url, download=True)
                     return ydl.prepare_filename(info)
         except Exception as e:
             raise Exception(f"Failed to download audio: {str(e)}")
     
     def separate_vocals(self, audio_path: str) -> str:
-        """Separate vocals from music using Spleeter."""
+        """Separate vocals from music using Demucs (state-of-the-art source separation)."""
         
         output_dir = tempfile.mkdtemp()
+        instrumental_path = os.path.join(output_dir, 'instrumental.wav')
         
         try:
-            # Use Spleeter to separate
-            waveform, _ = librosa.load(audio_path, sr=22050)
-            prediction = self.separator.separate(waveform)
+            # Load audio file
+            waveform, sample_rate = librosa.load(audio_path, sr=44100, mono=False)
             
-            # Save instrumental (without vocals)
-            instrumental = prediction['accompaniment']
-            instrumental_path = os.path.join(output_dir, 'instrumental.wav')
-            sf.write(instrumental_path, instrumental, 22050)
+            # Convert to tensor and add batch dimension
+            if len(waveform.shape) == 1:
+                waveform = np.stack([waveform, waveform])  # Convert mono to stereo
+            
+            # Ensure correct shape: (channels, samples)
+            if waveform.shape[0] > waveform.shape[1]:
+                waveform = waveform.T
+            
+            # Convert to torch tensor
+            waveform_tensor = torch.from_numpy(waveform).float().unsqueeze(0).to(self.device)
+            
+            # Apply separation model
+            with torch.no_grad():
+                sources = apply_model(self.separator_model, waveform_tensor[0], device=self.device)
+            
+            # Extract instrumental (everything except vocals)
+            # Demucs typically outputs: drums, bass, other, vocals
+            if sources.shape[0] >= 4:  # Standard 4-source model
+                instrumental = sources[0] + sources[1] + sources[2]  # drums + bass + other
+            else:  # 2-source model fallback
+                instrumental = sources[0]  # accompaniment
+            
+            # Convert back to numpy and save
+            instrumental_np = instrumental.cpu().numpy()
+            
+            # Ensure stereo output
+            if len(instrumental_np.shape) == 1:
+                instrumental_np = np.stack([instrumental_np, instrumental_np])
+            
+            # Save as WAV file
+            sf.write(instrumental_path, instrumental_np.T, sample_rate)
             
             return instrumental_path
             
         except Exception as e:
-            # Fallback: return original audio if separation fails
-            return audio_path
+            print(f"Demucs separation failed: {e}")
+            
+            # Fallback 1: Try basic librosa-based separation
+            try:
+                return self._fallback_vocal_separation(audio_path, output_dir)
+            except Exception as e2:
+                print(f"Fallback separation failed: {e2}")
+                # Fallback 2: Return original audio with reduced volume
+                return self._create_simple_instrumental(audio_path, output_dir)
+    
+    def _fallback_vocal_separation(self, audio_path: str, output_dir: str) -> str:
+        """Fallback vocal separation using librosa."""
+        
+        # Load audio
+        y, sr = librosa.load(audio_path, sr=22050)
+        
+        # Use harmonic-percussive separation
+        y_harmonic, y_percussive = librosa.effects.hpss(y)
+        
+        # Create a simple instrumental by reducing center channel
+        if len(y.shape) > 1:  # Stereo
+            # Simple center channel extraction for vocal removal
+            instrumental = y[0] - y[1]  # L - R channel (removes center vocals)
+        else:  # Mono
+            # Use harmonic component as instrumental approximation
+            instrumental = y_harmonic
+        
+        instrumental_path = os.path.join(output_dir, 'instrumental.wav')
+        sf.write(instrumental_path, instrumental, sr)
+        
+        return instrumental_path
+    
+    def _create_simple_instrumental(self, audio_path: str, output_dir: str) -> str:
+        """Create a simple instrumental by reducing volume (last resort)."""
+        
+        y, sr = librosa.load(audio_path, sr=22050)
+        
+        # Reduce volume and apply some filtering to simulate instrumental
+        instrumental = y * 0.7  # Reduce volume
+        
+        # Apply high-pass filter to reduce vocal frequencies
+        from scipy import signal
+        sos = signal.butter(10, 200, 'hp', fs=sr, output='sos')
+        instrumental = signal.sosfilt(sos, instrumental)
+        
+        instrumental_path = os.path.join(output_dir, 'instrumental.wav')
+        sf.write(instrumental_path, instrumental, sr)
+        
+        return instrumental_path
     
     def create_karaoke_video(self, instrumental_path: str, lyrics: str, song_info: Dict[str, Any]) -> str:
         """Create karaoke video with lyrics and instrumental."""

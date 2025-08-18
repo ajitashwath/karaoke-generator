@@ -15,6 +15,7 @@ def main():
     st.title("🎤 AI Karaoke Generator")
     st.markdown("Generate professional karaoke videos with instrumental tracks and synchronized lyrics!")
     
+    # Sidebar for API key
     with st.sidebar:
         st.header("🔑 Configuration")
         openai_api_key = st.text_input(
@@ -33,6 +34,7 @@ def main():
         st.info("👈 Please enter your OpenAI API Key in the sidebar to get started")
         return
     
+    # Initialize the karaoke generator
     try:
         karaoke_gen = KaraokeGenerator(openai_api_key)
         
@@ -42,6 +44,7 @@ def main():
         with col1:
             st.header("🎵 Song Request")
             
+            # Initialize session state
             if 'stage' not in st.session_state:
                 st.session_state.stage = 'input'
                 st.session_state.song_info = {}
@@ -55,6 +58,7 @@ def main():
                 
                 if song_name and st.button("🔍 Search Song", type="primary"):
                     with st.spinner("Searching for song information..."):
+                        # Get clarifying questions
                         questions = karaoke_gen.get_clarifying_questions(song_name)
                         st.session_state.questions = questions
                         st.session_state.song_name = song_name
@@ -79,6 +83,7 @@ def main():
                 
                 with col_generate:
                     if st.button("🎤 Generate Karaoke", type="primary"):
+                        # Check if all questions are answered
                         if all(answers.values()):
                             st.session_state.answers = answers
                             st.session_state.stage = 'generate'
@@ -90,10 +95,12 @@ def main():
             elif st.session_state.stage == 'generate':
                 st.info(f"🎵 Generating karaoke for: **{st.session_state.song_name}**")
                 
+                # Create a progress bar
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 
                 try:
+                    # Generate karaoke
                     result = karaoke_gen.generate_karaoke(
                         st.session_state.song_name,
                         st.session_state.answers,
@@ -102,6 +109,7 @@ def main():
                             status_text.text(step)
                         )
                     )
+                    
                     st.session_state.result = result
                     st.session_state.stage = 'result'
                     st.rerun()
@@ -116,21 +124,32 @@ def main():
             elif st.session_state.stage == 'result':
                 result = st.session_state.result
                 
-                st.success("✅ Karaoke generated successfully!")
+                if result.get('success', False):
+                    st.success("✅ Karaoke generated successfully!")
+                    
+                    # Display song info
+                    st.subheader("📋 Song Information")
+                    info_col1, info_col2 = st.columns(2)
+                    
+                    with info_col1:
+                        st.write(f"**Title:** {result['song_info']['title']}")
+                        st.write(f"**Artist:** {result['song_info']['artist']}")
+                    
+                    with info_col2:
+                        st.write(f"**Genre:** {result['song_info']['genre']}")
+                        st.write(f"**Duration:** {result['song_info']['duration']}")
+                else:
+                    st.error(f"❌ Error generating karaoke: {result.get('error', 'Unknown error')}")
+                    if st.button("🔄 Try Again"):
+                        st.session_state.stage = 'clarify'
+                        st.rerun()
+                    return
                 
-                st.subheader("📋 Song Information")
-                info_col1, info_col2 = st.columns(2)
-                
-                with info_col1:
-                    st.write(f"**Title:** {result['song_info']['title']}")
-                    st.write(f"**Artist:** {result['song_info']['artist']}")
-                
-                with info_col2:
-                    st.write(f"**Genre:** {result['song_info']['genre']}")
-                    st.write(f"**Duration:** {result['song_info']['duration']}")
-                
+                # Display lyrics
                 st.subheader("📝 Lyrics")
                 st.text_area("", result['lyrics'], height=300, disabled=True)
+                
+                # Audio player for instrumental
                 st.subheader("🎵 Instrumental Track")
                 if result.get('instrumental_path'):
                     with open(result['instrumental_path'], 'rb') as audio_file:
@@ -144,6 +163,7 @@ def main():
                         video_bytes = video_file.read()
                         st.video(video_bytes)
                     
+                    # Download button
                     st.download_button(
                         label="⬇️ Download Karaoke Video",
                         data=video_bytes,
@@ -151,6 +171,7 @@ def main():
                         mime="video/mp4"
                     )
                 
+                # New song button
                 if st.button("🎵 Generate Another Song"):
                     st.session_state.stage = 'input'
                     st.rerun()
