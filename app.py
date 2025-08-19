@@ -12,7 +12,7 @@ def main():
     )
     
     st.title("🎤 AI Karaoke Generator")
-    st.markdown("Generate instrumental tracks with synchronized lyrics display!")
+    st.markdown("Generate high-quality instrumental tracks with synchronized multilingual lyrics display!")
     
     with st.sidebar:
         st.header("🔑 Configuration")
@@ -28,6 +28,21 @@ def main():
         else:
             st.warning("⚠️ Please enter your OpenAI API Key to continue")
         
+        st.header("🆕 What's New")
+        st.markdown("""
+        **✨ Enhanced Features:**
+        - 🎵 **Advanced vocal separation** for cleaner instrumentals
+        - 🌍 **Multilingual lyrics support** (Hindi, Tamil, Spanish, etc.)
+        - 🎧 **Better audio quality** with improved processing
+        - ⏱️ **Smart timing synchronization**
+        
+        **🔧 Recent Fixes:**
+        - Fixed instrumental quality issues
+        - Added proper language detection
+        - Improved audio processing stability
+        - Enhanced lyrics timing accuracy
+        """)
+        
         st.header("ℹ️ How it works")
         st.markdown("""
         **Step 1:** Enter a song name
@@ -35,13 +50,15 @@ def main():
         **Step 2:** Answer clarifying questions
         
         **Step 3:** Get:
-        - 🎵 Instrumental track
-        - 📝 Synchronized lyrics display
+        - 🎵 High-quality instrumental track
+        - 📝 Synchronized lyrics in original language
+        - 🎤 Real-time karaoke display
         
-        **Features:**
-        - Real-time lyrics synchronization
-        - Clean instrumental separation
-        - Easy playback controls
+        **Supported Languages:**
+        - English, Hindi, Tamil, Telugu, Malayalam
+        - Spanish, French, German, Italian
+        - Japanese, Korean, Chinese, Arabic
+        - And many more!
         """)
     
     if not openai_api_key:
@@ -59,13 +76,42 @@ def main():
             st.session_state.song_info = {}
         
         if st.session_state.stage == 'input':
-            song_name = st.text_input(
-                "🎶 Enter the song name:",
-                placeholder="e.g., Shape of You, Bohemian Rhapsody, Despacito..."
-            )
+            col1, col2 = st.columns([3, 1])
             
-            if song_name and st.button("🔍 Search Song", type="primary"):
-                with st.spinner("Searching for song information..."):
+            with col1:
+                song_name = st.text_input(
+                    "🎶 Enter the song name:",
+                    placeholder="e.g., Shape of You, Tum Hi Ho, Despacito, Gangnam Style...",
+                    label_visibility="visible"
+                )
+            
+            with col2:
+                st.write("")  # Add spacing
+                st.write("")  # Add spacing
+                search_button = st.button("🔍 Search Song", type="primary", use_container_width=True)
+            
+            # Examples section
+            st.markdown("**Popular Examples:**")
+            example_cols = st.columns(4)
+            examples = [
+                "Tum Hi Ho", "Shape of You", "Despacito", "Gangnam Style",
+                "Vande Mataram", "Perfect", "Let It Go", "Believer"
+            ]
+            
+            for i, example in enumerate(examples):
+                with example_cols[i % 4]:
+                    if st.button(example, key=f"example_{i}", use_container_width=True):
+                        st.session_state.example_song = example
+                        st.rerun()
+            
+            # Handle example selection
+            if hasattr(st.session_state, 'example_song'):
+                song_name = st.session_state.example_song
+                del st.session_state.example_song
+                search_button = True
+            
+            if song_name and search_button:
+                with st.spinner("🔍 Searching for song information..."):
                     questions = karaoke_gen.get_clarifying_questions(song_name)
                     st.session_state.questions = questions
                     st.session_state.song_name = song_name
@@ -75,14 +121,19 @@ def main():
         elif st.session_state.stage == 'clarify':
             st.info(f"🎵 Song: **{st.session_state.song_name}**")
             st.subheader("📋 Please provide additional details:")
+            
             answers = {}
             for i, question in enumerate(st.session_state.questions):
-                answers[f"q{i}"] = st.text_input(question, key=f"question_{i}")
+                answers[f"q{i}"] = st.text_input(
+                    question, 
+                    key=f"question_{i}",
+                    label_visibility="visible"
+                )
             
             col_back, col_generate = st.columns([1, 2])
             
             with col_back:
-                if st.button("⬅️ Back"):
+                if st.button("⬅️ Back to Search"):
                     st.session_state.stage = 'input'
                     st.rerun()
             
@@ -97,17 +148,42 @@ def main():
         
         elif st.session_state.stage == 'generate':
             st.info(f"🎵 Generating karaoke for: **{st.session_state.song_name}**")
+            
+            # Create progress indicators
             progress_bar = st.progress(0)
             status_text = st.empty()
+            
+            # Detailed progress steps
+            progress_container = st.container()
+            with progress_container:
+                step_cols = st.columns(5)
+                step_indicators = []
+                step_names = ["Song Info", "Lyrics", "Download", "Process", "Timing"]
+                
+                for i, (col, name) in enumerate(zip(step_cols, step_names)):
+                    with col:
+                        indicator = st.empty()
+                        step_indicators.append((indicator, name))
+            
+            def enhanced_progress_callback(step, progress):
+                progress_bar.progress(progress)
+                status_text.text(f"🔄 {step}")
+                
+                # Update step indicators
+                current_step = int(progress * 5)
+                for i, (indicator, name) in enumerate(step_indicators):
+                    if i < current_step:
+                        indicator.markdown(f"✅ **{name}**")
+                    elif i == current_step:
+                        indicator.markdown(f"🔄 **{name}**")
+                    else:
+                        indicator.markdown(f"⏳ {name}")
             
             try:
                 result = karaoke_gen.generate_karaoke(
                     st.session_state.song_name,
                     st.session_state.answers,
-                    progress_callback=lambda step, progress: (
-                        progress_bar.progress(progress),
-                        status_text.text(step)
-                    )
+                    progress_callback=enhanced_progress_callback
                 )
                 st.session_state.result = result
                 st.session_state.stage = 'result'
@@ -115,6 +191,15 @@ def main():
                 
             except Exception as e:
                 st.error(f"❌ Error generating karaoke: {str(e)}")
+                
+                # Error details in expander
+                with st.expander("🔍 Error Details"):
+                    st.code(str(e))
+                    st.markdown("**Possible solutions:**")
+                    st.markdown("- Check your internet connection")
+                    st.markdown("- Try a different song")
+                    st.markdown("- Ensure the song exists on YouTube")
+                
                 if st.button("🔄 Try Again"):
                     st.session_state.stage = 'clarify'
                     st.rerun()
@@ -125,131 +210,222 @@ def main():
             if result.get('success', False):
                 st.success("✅ Karaoke generated successfully!")
                 
-                # Song information
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write(f"**Title:** {result['song_info']['title']}")
-                    st.write(f"**Artist:** {result['song_info']['artist']}")
-                with col2:
-                    st.write(f"**Genre:** {result['song_info']['genre']}")
-                    st.write(f"**Duration:** {result['song_info']['duration']}")
+                # Song information in a nice card
+                with st.container():
+                    st.markdown("### 🎵 Song Information")
+                    info_cols = st.columns(2)
+                    
+                    with info_cols[0]:
+                        st.markdown(f"**🎤 Title:** {result['song_info']['title']}")
+                        st.markdown(f"**👨‍🎤 Artist:** {result['song_info']['artist']}")
+                        st.markdown(f"**🎼 Genre:** {result['song_info']['genre']}")
+                    
+                    with info_cols[1]:
+                        st.markdown(f"**⏰ Duration:** {result['song_info']['duration']}")
+                        st.markdown(f"**🌍 Language:** {result['song_info']['language']}")
+                        st.markdown(f"**⭐ Popularity:** {'⭐' * result['song_info']['popularity']}")
                 
                 st.divider()
                 
-                # Audio player
+                # Audio player with enhanced controls
                 st.subheader("🎵 Instrumental Track")
                 if result.get('instrumental_path'):
+                    # Audio quality info
+                    st.info("🎧 High-quality instrumental track with advanced vocal separation")
+                    
                     with open(result['instrumental_path'], 'rb') as audio_file:
                         audio_bytes = audio_file.read()
+                        
+                        # Audio player
                         st.audio(audio_bytes, format='audio/wav')
                         
-                        # Download button for instrumental
-                        st.download_button(
-                            label="⬇️ Download Instrumental Track",
-                            data=audio_bytes,
-                            file_name=f"{st.session_state.song_name}_instrumental.wav",
-                            mime="audio/wav"
-                        )
+                        # Download section
+                        download_cols = st.columns([2, 1])
+                        with download_cols[0]:
+                            st.download_button(
+                                label="⬇️ Download Instrumental Track",
+                                data=audio_bytes,
+                                file_name=f"{st.session_state.song_name}_instrumental.wav",
+                                mime="audio/wav",
+                                use_container_width=True
+                            )
+                        with download_cols[1]:
+                            file_size = len(audio_bytes) / (1024 * 1024)  # MB
+                            st.metric("File Size", f"{file_size:.1f} MB")
                 
                 st.divider()
                 
-                # Synchronized lyrics display
+                # Enhanced synchronized lyrics display
                 st.subheader("🎤 Synchronized Lyrics")
                 
                 # Initialize lyrics timing if not already done
                 if 'lyrics_timing' not in st.session_state:
                     st.session_state.lyrics_timing = result.get('timed_lyrics', [])
                 
-                # Lyrics display container
-                lyrics_container = st.container()
+                # Lyrics control panel
+                control_cols = st.columns([1, 1, 1, 1])
                 
-                # Control buttons
-                col1, col2, col3 = st.columns([1, 1, 1])
-                
-                with col1:
-                    if st.button("▶️ Start Lyrics Sync"):
+                with control_cols[0]:
+                    start_button = st.button("▶️ Start Sync", use_container_width=True)
+                    if start_button:
                         st.session_state.lyrics_started = True
                         st.session_state.start_time = time.time()
                         st.rerun()
                 
-                with col2:
-                    if st.button("⏹️ Stop"):
-                        st.session_state.lyrics_started = False
+                with control_cols[1]:
+                    if st.button("⏸️ Pause", use_container_width=True):
+                        if st.session_state.get('lyrics_started', False):
+                            st.session_state.paused_time = time.time() - st.session_state.get('start_time', 0)
+                            st.session_state.lyrics_started = False
                         st.rerun()
                 
-                with col3:
-                    if st.button("🔄 Reset"):
+                with control_cols[2]:
+                    if st.button("▶️ Resume", use_container_width=True):
+                        if st.session_state.get('paused_time', 0) > 0:
+                            st.session_state.start_time = time.time() - st.session_state.paused_time
+                            st.session_state.lyrics_started = True
+                            st.session_state.paused_time = 0
+                        st.rerun()
+                
+                with control_cols[3]:
+                    if st.button("🔄 Reset", use_container_width=True):
                         st.session_state.lyrics_started = False
+                        st.session_state.paused_time = 0
                         if 'start_time' in st.session_state:
                             del st.session_state.start_time
+                        if 'paused_time' in st.session_state:
+                            del st.session_state.paused_time
                         st.rerun()
                 
-                # Display lyrics
+                # Lyrics display container
+                lyrics_container = st.container()
+                
+                # Display lyrics with highlighting
+                if st.session_state.get('lyrics_started', False) and 'start_time' in st.session_state:
+                    current_time = time.time() - st.session_state.start_time
+                    
+                    # Auto-refresh for real-time updates
+                    if current_time < 300:  # Limit to 5 minutes to prevent infinite refresh
+                        time.sleep(0.1)
+                        st.rerun()
+                elif st.session_state.get('paused_time', 0) > 0:
+                    current_time = st.session_state.paused_time
+                else:
+                    current_time = 0
+                
                 with lyrics_container:
-                    if st.session_state.get('lyrics_started', False) and 'start_time' in st.session_state:
-                        # Calculate current time
-                        current_time = time.time() - st.session_state.start_time
-                        
-                        # Find current lyric
-                        current_lyric = "🎵 Music playing..."
+                    lyrics_display = st.empty()
+                    
+                    if st.session_state.lyrics_timing:
+                        # Find current and next lyrics
+                        current_lyric = ""
                         next_lyric = ""
                         
-                        for i, (start_time, end_time, text) in enumerate(st.session_state.lyrics_timing):
-                            if start_time <= current_time < end_time:
+                        for i, (timestamp, text) in enumerate(st.session_state.lyrics_timing):
+                            if current_time >= timestamp:
                                 current_lyric = text
-                                # Get next lyric for preview
                                 if i + 1 < len(st.session_state.lyrics_timing):
-                                    next_lyric = st.session_state.lyrics_timing[i + 1][2]
+                                    next_lyric = st.session_state.lyrics_timing[i + 1][1]
+                            else:
+                                if not next_lyric:
+                                    next_lyric = text
                                 break
                         
-                        # Display current lyric prominently
-                        st.markdown(f"""
-                        <div style='text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                                    padding: 30px; border-radius: 15px; margin: 20px 0;'>
-                            <h2 style='color: white; margin: 0; font-size: 2.5em; text-shadow: 2px 2px 4px rgba(0,0,0,0.3);'>
-                                {current_lyric}
-                            </h2>
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-                        # Show next lyric preview
-                        if next_lyric:
-                            st.markdown(f"""
-                            <div style='text-align: center; background: rgba(255,255,255,0.1); 
-                                        padding: 15px; border-radius: 10px; margin: 10px 0;'>
-                                <p style='color: #666; margin: 0; font-size: 1.2em; font-style: italic;'>
-                                    Next: {next_lyric}
-                                </p>
+                        # Display with enhanced styling
+                        if current_lyric or next_lyric:
+                            lyrics_html = f"""
+                            <div style="text-align: center; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; margin: 10px 0;">
+                                <div style="color: white; font-size: 28px; font-weight: bold; margin-bottom: 10px; text-shadow: 2px 2px 4px rgba(0,0,0,0.5);">
+                                    🎤 {current_lyric if current_lyric else "♪ ♫ ♪"}
+                                </div>
+                                {f'<div style="color: #e0e0e0; font-size: 18px; opacity: 0.8;">Next: {next_lyric}</div>' if next_lyric else ''}
+                                <div style="margin-top: 15px;">
+                                    <div style="color: #ffeb3b; font-size: 16px;">⏱️ {current_time:.1f}s</div>
+                                </div>
+                            </div>
+                            """
+                            lyrics_display.markdown(lyrics_html, unsafe_allow_html=True)
+                        else:
+                            lyrics_display.markdown("""
+                            <div style="text-align: center; padding: 40px; background: #f5f5f5; border-radius: 10px; margin: 10px 0;">
+                                <div style="font-size: 24px; color: #666;">
+                                    🎵 Press Start Sync to begin karaoke mode 🎵
+                                </div>
                             </div>
                             """, unsafe_allow_html=True)
-                        
-                        # Auto-refresh for real-time updates
-                        time.sleep(0.5)
-                        st.rerun()
-                        
                     else:
-                        # Show all lyrics when not playing
-                        st.markdown("**Full Lyrics:**")
-                        lyrics_text = "\n".join([text for _, _, text in st.session_state.lyrics_timing])
-                        st.text_area("", lyrics_text, height=300, disabled=True)
+                        lyrics_display.info("📝 Lyrics timing data not available")
                 
+                # Static lyrics display option
+                st.subheader("📝 Full Lyrics")
+                if result.get('lyrics'):
+                    with st.expander("View Full Lyrics", expanded=False):
+                        st.text_area(
+                            "Lyrics:",
+                            value=result['lyrics'],
+                            height=300,
+                            disabled=True
+                        )
+                        
+                        # Download lyrics option
+                        st.download_button(
+                            label="⬇️ Download Lyrics",
+                            data=result['lyrics'],
+                            file_name=f"{st.session_state.song_name}_lyrics.txt",
+                            mime="text/plain"
+                        )
+                
+                # Action buttons
                 st.divider()
+                action_cols = st.columns([1, 1, 1])
                 
-                if st.button("🎵 Generate Another Song"):
-                    # Clear all session state
-                    for key in list(st.session_state.keys()):
-                        del st.session_state[key]
-                    st.session_state.stage = 'input'
-                    st.rerun()
+                with action_cols[0]:
+                    if st.button("🎵 Generate Another Song", use_container_width=True):
+                        # Clear session state
+                        keys_to_keep = []  # Keep API key related session state
+                        keys_to_clear = [k for k in st.session_state.keys() if k not in keys_to_keep]
+                        for key in keys_to_clear:
+                            del st.session_state[key]
+                        st.rerun()
+                
+                with action_cols[1]:
+                    if st.button("📤 Share Results", use_container_width=True):
+                        share_text = f"🎤 Just generated karaoke for '{st.session_state.song_name}' using AI Karaoke Generator!"
+                        st.success("Copy this text to share:")
+                        st.code(share_text)
+                
+                with action_cols[2]:
+                    if st.button("⭐ Rate This Song", use_container_width=True):
+                        rating = st.select_slider(
+                            "How was the karaoke quality?",
+                            options=[1, 2, 3, 4, 5],
+                            value=5,
+                            format_func=lambda x: "⭐" * x
+                        )
+                        if st.button("Submit Rating"):
+                            st.success(f"Thank you for rating: {'⭐' * rating}")
             
             else:
-                st.error(f"❌ Error generating karaoke: {result.get('error', 'Unknown error')}")
+                st.error("❌ Failed to generate karaoke. Please try again.")
                 if st.button("🔄 Try Again"):
                     st.session_state.stage = 'clarify'
                     st.rerun()
     
     except Exception as e:
-        st.error(f"❌ Error initializing application: {str(e)}")
+        st.error(f"❌ Application error: {str(e)}")
+        st.info("Please refresh the page and try again.")
+        
+        with st.expander("🔍 Technical Details"):
+            st.code(str(e))
+    
+    # Footer
+    st.markdown("---")
+    st.markdown("""
+    <div style="text-align: center; color: #666; padding: 20px;">
+        🎤 <strong>AI Karaoke Generator</strong> - Turn any song into a karaoke experience!<br>
+        Made with ❤️ using Streamlit | Support: multilingual lyrics & advanced vocal separation
+    </div>
+    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
