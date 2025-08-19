@@ -51,25 +51,63 @@ class KaraokeGenerator:
         answers_text = "\n".join([f"- {answer}" for answer in answers.values() if answer])
         prompt = ChatPromptTemplate.from_messages([
             SystemMessage(content="""You are a music database expert. Based on the song name and additional details,
-            provide a JSON object with: title, artist, album, year, genre, duration (mm:ss), language, and a popularity score (1-10).
-            Return ONLY the JSON object, no additional text."""),
+            provide a JSON object with EXACTLY these fields:
+            - title: string (song title)
+            - artist: string (artist name)
+            - album: string (album name, or "Single" if unknown)
+            - year: string (year or "Unknown")
+            - genre: string (music genre)
+            - duration: string (format: "mm:ss", estimate if unknown)
+            - language: string (primary language of the song)
+            - popularity: number (integer from 1-10)
+            
+            Return ONLY the JSON object, no additional text. Ensure all fields are included."""),
             HumanMessage(content=f"Song: {song_name}\nAdditional details:\n{answers_text}")
         ])
         response = self.llm.invoke(prompt.format_messages())
         
+        # Default values
+        default_info = {
+            "title": song_name, 
+            "artist": "Unknown Artist", 
+            "album": "Unknown Album", 
+            "year": "Unknown",
+            "genre": "Pop", 
+            "duration": "3:30", 
+            "language": "English", 
+            "popularity": 5
+        }
+        
         try:
-            return json.loads(response.content.strip())
-        except:
-            return {
-                "title": song_name, 
-                "artist": "Unknown", 
-                "album": "Unknown", 
-                "year": "Unknown",
-                "genre": "Unknown", 
-                "duration": "3:30", 
-                "language": "English", 
-                "popularity": 5
-            }
+            # Try to parse the JSON response
+            content = response.content.strip()
+            # Remove markdown code blocks if present
+            if content.startswith('```'):
+                content = content.split('```')[1]
+                if content.startswith('json'):
+                    content = content[4:]
+            content = content.strip()
+            
+            parsed_info = json.loads(content)
+            
+            # Merge with defaults to ensure all fields are present
+            for key, default_value in default_info.items():
+                if key not in parsed_info:
+                    parsed_info[key] = default_value
+                # Ensure popularity is an integer
+                if key == 'popularity':
+                    try:
+                        parsed_info[key] = min(10, max(1, int(parsed_info[key])))
+                    except:
+                        parsed_info[key] = 5
+            
+            return parsed_info
+            
+        except Exception as e:
+            print(f"Error parsing song info JSON: {e}")
+            # Return default info with the song name
+            default_info["title"] = song_name
+            return default_info
 
     def get_lyrics(self, song_info: Dict[str, Any]) -> str:
         """Get song lyrics structure in the correct language"""
@@ -114,14 +152,14 @@ class KaraokeGenerator:
             - Do NOT use English if the song is in another language
             
             Format the output as clean, singable lyrics without extra formatting."""),
-            HumanMessage(content=f"Song: {song_info['title']} by {song_info['artist']} (Language: {detected_language})")
+            HumanMessage(content=f"Song: {song_info.get('title', 'Unknown')} by {song_info.get('artist', 'Unknown')} (Language: {detected_language})")
         ])
         response = self.llm.invoke(prompt.format_messages())
         return response.content
 
     def download_audio(self, song_info: Dict[str, Any]) -> str:
         """Download audio from YouTube with better quality options"""
-        search_query = f"{song_info['title']} {song_info['artist']} official audio"
+        search_query = f"{song_info.get('title', '')} {song_info.get('artist', '')} official audio"
         temp_path = tempfile.mktemp(suffix='.%(ext)s')
         
         ydl_opts = {
@@ -140,7 +178,7 @@ class KaraokeGenerator:
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 search_results = ydl.extract_info(f"ytsearch1:{search_query}", download=False)
-                if not search_results['entries']:
+                if not search_results.get('entries'):
                     raise Exception("No search results found for the song on YouTube.")
                 
                 video_url = search_results['entries'][0]['webpage_url']
@@ -261,8 +299,12 @@ class KaraokeGenerator:
         # Parse duration string (mm:ss format)
         try:
             if ':' in duration_str:
-                minutes, seconds = map(int, duration_str.split(':'))
-                total_duration = minutes * 60 + seconds
+                parts = duration_str.split(':')
+                if len(parts) == 2:
+                    minutes, seconds = map(int, parts)
+                    total_duration = minutes * 60 + seconds
+                else:
+                    total_duration = 210  # Default 3:30
             else:
                 total_duration = 210  # Default 3:30
         except:
@@ -291,12 +333,12 @@ class KaraokeGenerator:
         remaining_time = total_duration - intro_duration - 8.0  # Leave 8s outro
         
         # Calculate time per line with some variation
-        base_time_per_line = remaining_time / len(lines)
+        base_time_per_line = remaining_time / len(lines) if lines else 5.0
         
         current_time = intro_duration
         for i, line in enumerate(lines):
             # Vary duration based on line length
-            line_duration = base_time_per_line * (0.8 + 0.4 * (len(line) / 50))
+            line_duration = base_time_per_line * (0.8 + 0.4 * min(len(line) / 50, 2))
             end_time = min(current_time + line_duration, total_duration - 8)
             
             timed_lyrics.append((current_time, end_time, line))
@@ -328,7 +370,7 @@ class KaraokeGenerator:
             
             if progress_callback: 
                 progress_callback("Creating synchronized lyrics timing...", 0.9)
-            timed_lyrics = self.create_lyrics_timing(lyrics, song_info['duration'])
+            timed_lyrics = self.create_lyrics_timing(lyrics, song_info.get('duration', '3:30'))
             
             if progress_callback: 
                 progress_callback("Complete!", 1.0)

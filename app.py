@@ -32,7 +32,7 @@ def main():
         st.markdown("""
         **✨ Enhanced Features:**
         - 🎵 **Advanced vocal separation** for cleaner instrumentals
-        - 🌍 **Multilingual lyrics support** (Hindi, Tamil, Spanish, etc.)
+        - 🌏 **Multilingual lyrics support** (Hindi, Tamil, Spanish, etc.)
         - 🎧 **Better audio quality** with improved processing
         - ⏱️ **Smart timing synchronization**
         
@@ -221,9 +221,10 @@ def main():
                         st.markdown(f"**🎼 Genre:** {result['song_info']['genre']}")
                     
                     with info_cols[1]:
-                        st.markdown(f"**⏰ Duration:** {result['song_info']['duration']}")
-                        st.markdown(f"**🌍 Language:** {result['song_info']['language']}")
-                        st.markdown(f"**⭐ Popularity:** {'⭐' * result['song_info']['popularity']}")
+                        st.markdown(f"**⏰ Duration:** {result['song_info'].get('duration', 'Unknown')}")
+                        st.markdown(f"**🌏 Language:** {result['song_info'].get('language', 'Unknown')}")
+                        popularity = result['song_info'].get('popularity', 5)
+                        st.markdown(f"**⭐ Popularity:** {'⭐' * popularity}")
                 
                 st.divider()
                 
@@ -321,12 +322,14 @@ def main():
                         current_lyric = ""
                         next_lyric = ""
                         
-                        for i, (timestamp, text) in enumerate(st.session_state.lyrics_timing):
-                            if current_time >= timestamp:
+                        # Fixed: Unpacking 3 values (start_time, end_time, text) instead of 2
+                        for i, (start_time, end_time, text) in enumerate(st.session_state.lyrics_timing):
+                            if start_time <= current_time < end_time:
                                 current_lyric = text
                                 if i + 1 < len(st.session_state.lyrics_timing):
-                                    next_lyric = st.session_state.lyrics_timing[i + 1][1]
-                            else:
+                                    next_lyric = st.session_state.lyrics_timing[i + 1][2]  # Get text from next tuple
+                                break
+                            elif current_time < start_time:
                                 if not next_lyric:
                                     next_lyric = text
                                 break
